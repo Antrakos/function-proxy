@@ -1,4 +1,4 @@
-module github.com/crossplane/function-template-go
+module github.com/Antrakos/function-proxy
 
 go 1.25.10
 

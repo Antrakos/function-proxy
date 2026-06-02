@@ -2,10 +2,10 @@
 apiVersion: pkg.crossplane.io/v1
 kind: Function
 metadata:
-  name: function-template-go
+  name: function-proxy
   annotations:
     # This tells crossplane render to connect to the function locally.
     render.crossplane.io/runtime: Development
 spec:
   # This is ignored when using the Development runtime.
-  package: function-template-go
+  package: function-proxy
