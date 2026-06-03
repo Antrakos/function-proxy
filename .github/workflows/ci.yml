@@ -5,12 +5,12 @@ on:
     branches:
       - main
       - release-*
+    tags:
+      - 'v*'
   pull_request: {}
-  workflow_dispatch:
-    inputs:
-      version:
-        description: Package version (e.g. v0.1.0)
-        required: false
+  # Allows manually re-running the pipeline (e.g. to re-publish) against a chosen
+  # ref. The package version is always derived from the ref
+  workflow_dispatch: {}
 
 env:
   # Common versions. golangci-lint is pinned via the `tool` directive in go.mod.
@@ -22,9 +22,6 @@ env:
   # xpkg.crossplane.io is just an alias for ghcr.io, so we upload to ghcr.io but
   # this'll be pulled from xpkg.crossplane.io.
   XPKG: ghcr.io/${{ github.repository}}
-
-  # The package version to push. The default is 0.0.0-gitsha.
-  XPKG_VERSION: ${{ inputs.version }}
 
 jobs:
   lint:
@@ -145,15 +142,44 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # If a version wasn't explicitly passed as a workflow_dispatch input we
-      # default to version v0.0.0-<git-commit-date>-<git-short-sha>, for example
-      # v0.0.0-20231101115142-1091066df799. This is a simple implementation of
-      # Go's pseudo-versions: https://go.dev/ref/mod#pseudo-versions.
-      - name: Set Default Multi-Platform Package Version
-        if: env.XPKG_VERSION == ''
-        run: echo "XPKG_VERSION=v0.0.0-$(date -d@$(git show -s --format=%ct) +%Y%m%d%H%M%S)-$(git rev-parse --short=12 HEAD)" >> $GITHUB_ENV
+      # Derive the version to push from the ref. On a git tag push (e.g. v0.1.0)
+      # we publish that exact tag as a stable version. Otherwise we default to a
+      # pseudo-version of the form v0.0.0-<git-commit-date>-<git-short-sha>, for
+      # example v0.0.0-20231101115142-1091066df799. This is a simple
+      # implementation of Go's pseudo-versions: https://go.dev/ref/mod#pseudo-versions.
+      - name: Set Multi-Platform Package Version
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "XPKG_VERSION=${{ github.ref_name }}" >> "$GITHUB_ENV"
+          else
+            echo "XPKG_VERSION=v0.0.0-$(date -d@$(git show -s --format=%ct) +%Y%m%d%H%M%S)-$(git rev-parse --short=12 HEAD)" >> "$GITHUB_ENV"
+          fi
 
       - name: Push Multi-Platform Package to GitHub Container Registry
         # XPKG repo name can't contain uppercase characters like UpboundCare, we need to lowercase if the GithubOrg contains them.
         # See https://github.com/orgs/community/discussions/25768#discussioncomment-8057564 for XPKG@L lowercase explanation
         run: "./crossplane --verbose xpkg push --package-files $(echo *.xpkg|tr ' ' ,) ${XPKG@L}:${{ env.XPKG_VERSION }}"
+
+  # This job creates a GitHub Release whenever a v* tag is pushed. It runs after
+  # the package has been published to GHCR so the release notes can reference an
+  # already-available package version.
+  release:
+    if: ${{ github.ref_type == 'tag' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    needs:
+      - push
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --title "${{ github.ref_name }}" \
+            --generate-notes \
+            --verify-tag \
+            --notes "Package: \`${XPKG@L}:${{ github.ref_name }}\`"
