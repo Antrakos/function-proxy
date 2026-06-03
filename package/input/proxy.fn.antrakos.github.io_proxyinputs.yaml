@@ -1,0 +1,82 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.0
+  name: proxyinputs.proxy.fn.antrakos.github.io
+spec:
+  group: proxy.fn.antrakos.github.io
+  names:
+    categories:
+    - crossplane
+    kind: ProxyInput
+    listKind: ProxyInputList
+    plural: proxyinputs
+    singular: proxyinput
+  scope: Namespaced
+  versions:
+  - name: v1beta1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          ProxyInput can be used to provide input to this Function.
+          It specifies the backend to forward to and the payload to substitute as the backend's input.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          backend:
+            description: |-
+              Backend specifies the gRPC endpoint to forward the request to.
+              The proxy always dials insecure h2c; the backend must run with --insecure.
+            properties:
+              timeout:
+                description: Timeout for the backend call. 0s (default) inherits Crossplane's
+                  function timeout.
+                type: string
+              url:
+                description: |-
+                  URL is the gRPC target to dial. Supported forms:
+                    - "service.namespace:port" shorthand — expanded to the in-cluster FQDN
+                      "dns:///service.namespace.svc.cluster.local:port". Follows Kubernetes
+                      DNS order: first label is the Service, second is the namespace.
+                    - A full host:port (e.g. an FQDN, IP, or Ingress host), used verbatim.
+                    - An explicit gRPC resolver target (anything containing "://", e.g.
+                      "dns:///host:port" or "unix:///path"), used verbatim. Use this form to
+                      opt out of shorthand expansion — e.g. an external two-label domain like
+                      "dns:///example.com:9443".
+                  Examples:
+                    function-backend.example-system:9443
+                    dns:///function-backend.example-system.svc.cluster.local:9443
+                minLength: 1
+                type: string
+            required:
+            - url
+            type: object
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          payload:
+            description: |-
+              Payload is the opaque KRM object forwarded as the backend's input.
+              The proxy treats this as opaque and does not interpret its contents.
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+        required:
+        - backend
+        - payload
+        type: object
+    served: true
+    storage: true

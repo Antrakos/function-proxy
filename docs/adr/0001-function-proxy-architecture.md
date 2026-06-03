@@ -124,16 +124,47 @@ outbound** to the backend.
    to 4 MB in `main.go`). See Open Risk below re: the inbound *send* (response)
    size limit, which `function.Serve` does not currently expose.
 
+7. **Client-side load balancing: `round_robin` + headless backend Service.** Dial
+   the backend with the gRPC service config
+   `{"loadBalancingConfig":[{"round_robin":{}}],"methodConfig":[{"name":[{}],"waitForReady":true}]}`.
+   This is the same configuration Crossplane's own function-runner applies when
+   it calls a packaged function, and we adopt it for the same reason: a function
+   backend is expected to run multiple replicas, and gRPC's default `pick_first`
+   policy would pin a single long-lived HTTP/2 connection to one pod and route
+   every request there, leaving the other replicas idle. `round_robin` spreads
+   each call across all backend pods, but only when the resolver returns multiple
+   addresses — so the **backend Service must be headless (`clusterIP: None`)**, a
+   contract documented in the README alongside `--insecure`. A ClusterIP Service
+   exposes one virtual IP and defeats client-side balancing. Our
+   `service.namespace:port` shorthand already resolves to a `dns:///` target (see
+   Backend resolution), which the dns resolver re-resolves as pods churn during a
+   rollout. `waitForReady` additionally makes calls wait for a ready backend
+   (e.g. mid-rollout) instead of failing fast, bounded by the call's own
+   timeout/deadline — this slightly changes failure timing relative to a bare
+   dial (a not-yet-ready backend yields a deadline rather than an immediate
+   connection error), which is the desired behavior for rolling backends.
+
 ### Backend resolution (`ProxyInput.backend`)
 
-- `url`: the gRPC target, used verbatim. Accepts the gRPC resolver syntax
-  `dns:///host:port`, a bare `host:port`, or an Ingress host. For an in-cluster
-  Service this is the full DNS name,
-  e.g. `dns:///function-backend.example-system.svc.cluster.local:9443`. A single
-  `url` field is the only routing form — there is no separate structured
-  `service` block, since it would be redundant sugar over `url`. Transport
-  security is not encoded in the URL scheme: the proxy always dials insecure h2c
-  (see decision 3), there is no `tls` field.
+- `url`: the gRPC target. It recognises exactly one shorthand and otherwise
+  stays out of the way, applying these rules in order:
+  - Any value containing `://` (an explicit gRPC resolver scheme, e.g.
+    `dns:///host:port`, `unix:///path`) is used **verbatim**. This is the escape
+    hatch for targets the shorthand would otherwise rewrite — notably an external
+    two-label domain such as `dns:///example.com:9443`.
+  - A `host:port` whose host is already fully qualified (ends in
+    `.svc.cluster.local`, ends in `.`, or is an IP literal) is used **verbatim**.
+  - A two-label `service.namespace:port` is **expanded** to
+    `dns:///service.namespace.svc.cluster.local:port`, following Kubernetes DNS
+    order (first label = Service, second = namespace). This is the convenience
+    shorthand for the common in-cluster case.
+  - Anything else (single label, three+ labels, no port, unparseable) is left
+    **verbatim** for gRPC to resolve or reject. A bare single-label
+    `service:port` is intentionally *not* expanded: that would require the proxy
+    to know its own namespace, which we keep it free of.
+  The pool is keyed by the *resolved* target, so the shorthand and its expanded
+  FQDN share one connection. Transport security is not encoded in the URL scheme:
+  the proxy always dials insecure h2c (see decision 3), there is no `tls` field.
 - `timeout`: `0s` inherits Crossplane's function timeout.
 
 ### `ProxyInput` schema (step input)
@@ -143,8 +174,9 @@ apiVersion: proxy.fn.antrakos.github.io/v1alpha1
 kind: ProxyInput
 # --- routing ---
 backend:                        # required
-  url: dns:///function-backend.example-system.svc.cluster.local:9443
-  # in-cluster Service, Ingress host, or external host — all expressed as url.
+  url: function-backend.example-system:9443
+  # "service.namespace:port" shorthand → dns:///…svc.cluster.local:port.
+  # A full host:port or an explicit dns:/// target is also accepted (verbatim).
   # Always dialed insecure h2c; the backend must run with --insecure (mesh mTLS).
   timeout: 0s                   # 0 = inherit Crossplane's function timeout
 # --- payload forwarded to the backend as ITS input (opaque to the proxy) ---

@@ -25,7 +25,7 @@ func (c *CLI) Run() error {
 		return err
 	}
 
-	return function.Serve(&Function{log: log},
+	return function.Serve(NewFunction(log),
 		function.Listen(c.Network, c.Address),
 		function.MTLSCertificates(c.TLSCertsDir),
 		function.Insecure(c.Insecure),
@@ -33,6 +33,6 @@ func (c *CLI) Run() error {
 }
 
 func main() {
-	ctx := kong.Parse(&CLI{}, kong.Description("A Crossplane Composition Function."))
+	ctx := kong.Parse(&CLI{}, kong.Description("A Crossplane Composition Function that proxies requests to a backend."))
 	ctx.FatalIfErrorf(ctx.Run())
 }

@@ -8,10 +8,16 @@ spec:
     kind: XR
   mode: Pipeline
   pipeline:
-  - step: run-the-template
+  - step: forward-to-backend
     functionRef:
       name: function-proxy
     input:
-      apiVersion: template.fn.crossplane.io/v1beta1
-      kind: Input
-      example: "Hello world"
+      apiVersion: proxy.fn.antrakos.github.io/v1beta1
+      kind: ProxyInput
+      backend:
+        url: function-backend.crossplane-system:9443
+        # timeout: 0s  # 0 = inherit Crossplane's function timeout
+      payload:
+        apiVersion: template.fn.crossplane.io/v1beta1
+        kind: Input
+        # Add the backend function's expected input fields here
