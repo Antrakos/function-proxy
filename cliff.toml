@@ -1,0 +1,64 @@
+# git-cliff configuration — generates release notes from conventional commits.
+# https://git-cliff.org/docs/configuration
+
+[changelog]
+# Rendered per release. We emit only the grouped commit body; the GitHub release
+# title (the tag) and the package/compare-link footer are added by the workflow.
+# Groups are ordered via a hidden "<!-- N -->" sort key that group_by sorts on
+# and the postprocessor then strips from the output.
+body = """
+{% set breaking = commits | filter(attribute="breaking", value=true) %}\
+{% if breaking | length > 0 %}
+### 💥 Breaking Changes
+{% for commit in breaking %}
+- {{ commit.breaking_description | upper_first }}\
+{% endfor %}
+{% endif %}\
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | upper_first }}
+{% for commit in commits %}
+- {% if commit.breaking %}[**breaking**] {% endif %}{{ commit.message | upper_first }}\
+{% endfor %}
+{% endfor %}
+"""
+# Strip the hidden sort keys ("<!-- 0 -->") used to order groups.
+postprocessors = [
+  { pattern = '<!-- [0-9]+ -->', replace = "" },
+]
+trim = true
+
+[git]
+# Parse commits as conventional commits and skip those that don't match.
+conventional_commits = true
+filter_unconventional = true
+# Detect breaking changes from "!" and "BREAKING CHANGE:" footers.
+protect_breaking_commits = true
+# Remove "type(scope): " prefix so entries read as plain sentences.
+commit_preprocessors = []
+
+# Commit grouping. Sort keys keep user-facing changes (features, fixes) at the
+# top and everything else in a single "Other" section at the bottom; lower
+# numbers sort higher. Breaking changes get their own section built from the
+# `breaking` flag in the template above, so they aren't grouped here.
+[[git.commit_parsers]]
+message = "^feat"
+group = "<!-- 1 -->🚀 Features"
+[[git.commit_parsers]]
+message = "^fix"
+group = "<!-- 2 -->🐛 Bug Fixes"
+[[git.commit_parsers]]
+message = "^perf"
+group = "<!-- 3 -->⚡ Performance"
+# Everything else relevant to the changelog but not to function users.
+[[git.commit_parsers]]
+message = "^(chore|ci|build|docs|refactor|test|style|revert)"
+group = "<!-- 9 -->🧰 Other Changes"
+# Anything that still didn't match a type also lands in Other.
+[[git.commit_parsers]]
+message = ".*"
+group = "<!-- 9 -->🧰 Other Changes"
+
+# Process commits newest-first within each group.
+sort_commits = "newest"
+# Only consider tags shaped like v1.2.3.
+tag_pattern = "v[0-9].*"

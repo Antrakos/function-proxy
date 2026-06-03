@@ -174,13 +174,30 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          # git-cliff needs full history and tags to compute the commit range.
+          fetch-depth: 0
+
+      # Generate release notes from conventional commits since the previous tag.
+      # Configuration (grouping, ordering) lives in cliff.toml.
+      - name: Generate Release Notes
+        id: notes
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: cliff.toml
+          args: --latest --strip header
 
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          {
+            cat "${{ steps.notes.outputs.changelog }}"
+            echo
+            echo "**Package:** \`${XPKG@L}:${{ github.ref_name }}\`"
+            echo "**Full Changelog:** ${{ github.server_url }}/${{ github.repository }}/commits/${{ github.ref_name }}"
+          } > release-notes.md
           gh release create "${{ github.ref_name }}" \
             --title "${{ github.ref_name }}" \
-            --generate-notes \
             --verify-tag \
-            --notes "Package: \`${XPKG@L}:${{ github.ref_name }}\`"
+            --notes-file release-notes.md
