@@ -86,3 +86,19 @@ rollout) rather than failing fast, bounded by the call's timeout.
   so the proxy never needs an update just to forward new Crossplane gRPC fields.
 - **Minimal footprint** — stateless proxy with connection pooling; adds < ~5 ms
   p99 latency per call in-cluster.
+
+## Development
+
+All dev tooling is pinned via `tool` directives in `go.mod`, so the only
+prerequisite is the Go toolchain — no separately installed binaries, and
+local versions always match CI.
+
+```sh
+go test ./...                    # run tests
+go tool golangci-lint run ./...  # lint (pinned version)
+go tool lefthook install         # one-time: install git hooks
+```
+
+`lefthook install` wires up a **pre-push** hook (see `lefthook.yml`) that runs
+the linter and tests before anything leaves your machine, keeping commits fast
+while still gating pushes.

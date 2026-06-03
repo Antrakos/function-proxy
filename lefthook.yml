@@ -1,0 +1,7 @@
+pre-push:
+  parallel: true
+  commands:
+    lint:
+      run: go tool golangci-lint run ./...
+    test:
+      run: go test ./...
