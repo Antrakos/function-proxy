@@ -72,8 +72,6 @@ func NewFunction(log logging.Logger) *Function {
 // RunFunction decodes the proxy input, substitutes the payload, forwards the
 // request to the backend, and returns the backend's response verbatim.
 func (f *Function) RunFunction(ctx context.Context, req *fnv1.RunFunctionRequest) (*fnv1.RunFunctionResponse, error) {
-	f.log.Info("Running function proxy", "tag", req.GetMeta().GetTag())
-
 	rsp := response.To(req, response.DefaultTTL)
 
 	// Step 1: Parse and validate proxy input.

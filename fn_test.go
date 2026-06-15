@@ -12,6 +12,7 @@ import (
 
 	v1beta1 "github.com/Antrakos/function-proxy/input/v1beta1"
 	"github.com/google/go-cmp/cmp"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -21,6 +22,7 @@ import (
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
+	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/structpb"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -687,7 +689,7 @@ func TestRunFunction_BackendCallError(t *testing.T) {
 		t.Fatal("RunFunction(): expected gRPC error from backend, got nil")
 	}
 
-	// Verify the error is a gRPC status error.
+	// Verify the error is a gRPC status error with code and message preserved.
 	st, ok := status.FromError(err)
 	if !ok {
 		t.Fatalf("RunFunction(): expected gRPC status error, got %T: %v", err, err)
@@ -695,6 +697,9 @@ func TestRunFunction_BackendCallError(t *testing.T) {
 
 	if st.Code() != codes.Unavailable {
 		t.Errorf("RunFunction(): error code = %v, want Unavailable", st.Code())
+	}
+	if st.Message() != "backend is overloaded" {
+		t.Errorf("RunFunction(): error message = %q, want %q", st.Message(), "backend is overloaded")
 	}
 }
 
@@ -1324,6 +1329,111 @@ func TestRunFunction_E2EBackendError(t *testing.T) {
 	}
 	if st.Code() != codes.Internal {
 		t.Errorf("E2E RunFunction(): error code = %v, want Internal", st.Code())
+	}
+	if st.Message() != "something broke" {
+		t.Errorf("E2E RunFunction(): error message = %q, want %q", st.Message(), "something broke")
+	}
+}
+
+// TestRunFunction_E2EBackendErrorWithDetails verifies that gRPC error details
+// (rich status payloads) survive the proxy hop unchanged — the caller should
+// see the exact same status the backend produced, as if the proxy weren't there.
+func TestRunFunction_E2EBackendErrorWithDetails(t *testing.T) {
+	// Build a rich gRPC error with a details payload.
+	detailMsg, err := anypb.New(&errdetails.ErrorInfo{
+		Reason:   "RATE_LIMIT_EXCEEDED",
+		Domain:   "backend.example.org",
+		Metadata: map[string]string{"limit": "100", "window": "60s"},
+	})
+	if err != nil {
+		t.Fatalf("Failed to create ErrorInfo detail: %v", err)
+	}
+
+	stErr := status.New(codes.ResourceExhausted, "too many requests")
+	stErr, err = stErr.WithDetails(detailMsg)
+	if err != nil {
+		t.Fatalf("Failed to attach details to status: %v", err)
+	}
+
+	mock := &mockBackend{
+		handler: func(_ context.Context, _ *fnv1.RunFunctionRequest) (*fnv1.RunFunctionResponse, error) {
+			return nil, stErr.Err()
+		},
+	}
+	backendSrv, _, backendTarget := startBackendServer(t, mock)
+	defer backendSrv.Stop()
+
+	// Start the proxy.
+	lc := net.ListenConfig{}
+	proxyLis, err := lc.Listen(context.Background(), "tcp", "localhost:0")
+	if err != nil {
+		t.Fatalf("Failed to listen for proxy: %v", err)
+	}
+
+	f := NewFunction(logging.NewNopLogger())
+	defer f.CloseConnections()
+
+	proxySrv := grpc.NewServer()
+	fnv1.RegisterFunctionRunnerServiceServer(proxySrv, f)
+
+	go func() {
+		if err := proxySrv.Serve(proxyLis); err != nil {
+			t.Logf("Proxy server stopped: %v", err)
+		}
+	}()
+	defer proxySrv.Stop()
+
+	conn, err := grpc.NewClient(proxyLis.Addr().String(),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatalf("Failed to dial proxy: %v", err)
+	}
+	defer conn.Close()
+
+	client := fnv1.NewFunctionRunnerServiceClient(conn)
+
+	req := &fnv1.RunFunctionRequest{
+		Meta: &fnv1.RequestMeta{Tag: "e2e-details"},
+		Input: proxyInputStruct(backendTarget, "", map[string]interface{}{
+			"kind": "Input",
+		}),
+	}
+
+	_, err = client.RunFunction(context.Background(), req)
+	if err == nil {
+		t.Fatal("E2E RunFunction(): expected error from backend, got nil")
+	}
+
+	gotSt, ok := status.FromError(err)
+	if !ok {
+		t.Fatalf("E2E RunFunction(): expected gRPC status error, got %T: %v", err, err)
+	}
+
+	// Code and message must be identical to what the backend sent.
+	if gotSt.Code() != codes.ResourceExhausted {
+		t.Errorf("Error code = %v, want ResourceExhausted", gotSt.Code())
+	}
+	if gotSt.Message() != "too many requests" {
+		t.Errorf("Error message = %q, want %q", gotSt.Message(), "too many requests")
+	}
+
+	// Details must survive the proxy hop intact.
+	if len(gotSt.Details()) != 1 {
+		t.Fatalf("Error details count = %d, want 1", len(gotSt.Details()))
+	}
+	var gotDetail errdetails.ErrorInfo
+	if err := gotSt.Details()[0].(*anypb.Any).UnmarshalTo(&gotDetail); err != nil {
+		t.Fatalf("Failed to unmarshal detail to ErrorInfo: %v", err)
+	}
+	if gotDetail.GetReason() != "RATE_LIMIT_EXCEEDED" {
+		t.Errorf("ErrorInfo.Reason = %q, want %q", gotDetail.GetReason(), "RATE_LIMIT_EXCEEDED")
+	}
+	if gotDetail.GetDomain() != "backend.example.org" {
+		t.Errorf("ErrorInfo.Domain = %q, want %q", gotDetail.GetDomain(), "backend.example.org")
+	}
+	if gotDetail.GetMetadata()["limit"] != "100" || gotDetail.GetMetadata()["window"] != "60s" {
+		t.Errorf("ErrorInfo.Metadata = %v, want map[limit:100 window:60s]", gotDetail.GetMetadata())
 	}
 }
 
