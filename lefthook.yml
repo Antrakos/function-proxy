@@ -1,6 +1,8 @@
 pre-push:
-  parallel: true
+  parallel: false
   commands:
+    tidy:
+      run: go mod tidy && git diff --exit-code go.mod go.sum
     lint:
       run: go tool golangci-lint run ./...
     test:
