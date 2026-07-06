@@ -103,6 +103,7 @@ func (f *Function) RunFunction(ctx context.Context, req *fnv1.RunFunctionRequest
 	// Step 4: Get or dial a connection to the backend, keyed by resolved target.
 	conn, err := f.getConn(target)
 	if err != nil {
+		f.log.Info("Cannot dial backend", "url", in.Backend.URL, "target", target, "tag", req.GetMeta().GetTag(), "error", err)
 		response.Fatal(rsp, errors.Wrapf(err, "cannot dial backend at %s", target))
 		return rsp, nil
 	}
@@ -135,7 +136,7 @@ func (f *Function) RunFunction(ctx context.Context, req *fnv1.RunFunctionRequest
 	)
 	if err != nil {
 		// Propagate gRPC errors so Crossplane retries the reconcile.
-		f.log.Debug("Backend call failed", "url", in.Backend.URL, "error", err)
+		f.log.Info("Backend call failed", "url", in.Backend.URL, "tag", req.GetMeta().GetTag(), "error", err)
 		return nil, err
 	}
 
